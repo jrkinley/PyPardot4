@@ -12,3 +12,6 @@
 
 # PyCharm / Jetbrains IDE
 .idea
+
+# Python dotenv settings
+.env

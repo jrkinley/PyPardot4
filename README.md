@@ -1,33 +1,7 @@
 PyPardot4
 =========
 
-PyPardot was originally created by Josh Geller as a wrapper for Version 3 of the Pardot API.
-I, Matt Needham, have edited PyPardot for compatibility with Version 4 of the Pardot API.
-Version 4 accommodates multiple prospects with the same email address. If your Pardot org does not have this featured enabled, you must use version 3.
-To determine if your Pardot org has this feature enabled, [check out this guide](http://developer.pardot.com/kb/api-version-4/).
-
-PyPardot is an API wrapper for [Pardot](http://www.pardot.com/), written in Python.
-
-Using it is simple:
-
-```python
-from pypardot.client import PardotAPI
-
-p = PardotAPI(
-  email='email@email.com',
-  password='password',
-  user_key='userkey'
-)
-                
-p.authenticate()
-
-# Create a new prospect
-p.prospects.create(email='joe@company.com', first_name='Joe', last_name='Schmoe')
-
-# Read data about our prospect
-print(p.prospects.read_by_email(email='joe@company.com'))
-
-```
+PyPardot is an API wrapper for [Pardot](http://developer.pardot.com/kb/api-version-4/), written in Python.
 
 Features
 ---
@@ -68,6 +42,8 @@ Required
 ---
 
 + [requests](http://docs.python-requests.org/en/latest/)
++ [pyjwt](https://pyjwt.readthedocs.io/en/stable/)
++ [cryptography](https://cryptography.io/en/latest/)
 
 Installation
 ---
@@ -82,19 +58,22 @@ Usage
 
 ### Authentication
 
-To connect to the Pardot API, you'll need the e-mail address, password, and user key associated with your Pardot account. Your user key is available in the Pardot application under My Settings.
+To connect to the Pardot API you must setup a Salesforce SSO user that is able to acquire Pardot access tokens. See these articles for more information about Salesforce OAuth and how to set it up:
 
-The client will authenticate before performing other API calls, but you can manually authenticate as well:
+https://developer.pardot.com/kb/authentication/
+https://help.salesforce.com/articleView?id=sf.remoteaccess_oauth_flows.htm&type=5
+https://help.salesforce.com/articleView?id=sf.remoteaccess_oauth_jwt_flow.htm&type=5
 
+Specifically this version of PyPardot4 uses the OAuth2 JSON Web Token (JWT) Bearer Flow, which requires you to create a X509 Certificate and add it to the connected app configuration in Salesforce. PyPardot4 generates a JWT, which is signed with the certificate's private key, and is used by Salesforce to verify the signature and issue a Pardot API access token.
 
 ```python
-p = PardotAPI(
-  email='your_pardot_email',
-  password='your_pardot_password',
-  user_key='your_pardot_user_key'
+api = PardotAPI(
+    email='email@email.com',
+    consumer_key='consumer_key',
+    business_unit_id='business_unit_id',
+    private_key_file='/path/to/private.key'
 )
-                
-p.authenticate()
+api.authenticate()
 ```
 
 ### Querying Objects
@@ -128,9 +107,9 @@ p.emails.send_to_email(prospect_email='joe@company.com', email_template_id=123)
 
 ### Error Handling
 
-#### Handling expired API keys
+#### Handling expired Salesforce access tokens
 
-Pardot API keys expire after 60 minutes. If PyPardot detects an 'Invalid API key' error during any API call, it will automatically attempt to re-authenticate and obtain a new valid API key. If re-authentication is successful, the API call will be re-issued. If re-authentication fails, a `PardotAPIError` is thrown.
+TODO
 
 #### Invalid API parameters
 

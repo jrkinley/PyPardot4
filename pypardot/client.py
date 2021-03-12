@@ -1,4 +1,8 @@
+import jwt
+import time
 import requests
+import logging
+from requests.api import get, post
 from .objects.accounts import Accounts
 from .objects.customfields import CustomFields
 from .objects.customredirects import CustomRedirects
@@ -24,6 +28,8 @@ from .objects.campaigns import Campaigns
 
 from .errors import PardotAPIError
 
+logger = logging.getLogger(__name__)
+
 # Issue #1 (http://code.google.com/p/pybing/issues/detail?id=1)
 # Python 2.6 has json built in, 2.5 needs simplejson
 try:
@@ -35,11 +41,13 @@ BASE_URI = 'https://pi.pardot.com'
 
 
 class PardotAPI(object):
-    def __init__(self, email, password, user_key, version=4):
+    def __init__(self, email, consumer_key, business_unit_id, 
+                 private_key_file, salesforce_sandbox=False, version=4):
         self.email = email
-        self.password = password
-        self.user_key = user_key
-        self.api_key = None
+        self.consumer_key = consumer_key
+        self.business_unit_id = business_unit_id
+        self.private_key_file = private_key_file
+        self.salesforce_domain = 'https://{}.salesforce.com'.format('test' if salesforce_sandbox else 'login')
         self.version = version
         self.accounts = Accounts(self)
         self.campaigns = Campaigns(self)
@@ -65,76 +73,58 @@ class PardotAPI(object):
         self.visitoractivities = VisitorActivities(self)
 
     def post(self, object_name, path=None, params=None, retries=0):
-        """
-        Makes a POST request to the API. Checks for invalid requests that raise PardotAPIErrors. If the API key is
-        invalid, one re-authentication request is made, in case the key has simply expired. If no errors are raised,
-        returns either the JSON response, or if no JSON was returned, returns the HTTP response status code.
-        """
-        if params is None:
-            params = {}
-        params.update({'user_key': self.user_key, 'api_key': self.api_key, 'format': 'json'})
-        try:
-            self._check_auth(object_name=object_name)
-            request = requests.post(self._full_path(object_name, self.version, path), data=params)
-            response = self._check_response(request)
-            return response
-        except PardotAPIError as err:
-            if err.message == 'Invalid API key or user key':
-                response = self._handle_expired_api_key(err, retries, 'post', object_name, path, params)
-                return response
-            else:
-                raise err
+        """Makes a POST request to the API."""
+        return self._send('post', object_name, path, params, retries)
 
     def get(self, object_name, path=None, params=None, retries=0):
+        """Makes a GET request to the API."""
+        return self._send('get', object_name, path, params, retries)
+
+    def _send(self, method, object_name, path=None, params=None, retries=0):
         """
-        Makes a GET request to the API. Checks for invalid requests that raise PardotAPIErrors. If the API key is
-        invalid, one re-authentication request is made, in case the key has simply expired. If no errors are raised,
-        returns either the JSON response, or if no JSON was returned, returns the HTTP response status code.
+        Sends request to the API. If the access token has expired then a new access token
+        is acquired and the request is retried once. Returns the JSON response, or the HTTP
+        status code if no JSON was returned.
         """
         if params is None:
             params = {}
         params.update({'format': 'json'})
-        headers = self._build_auth_header()
         try:
-            self._check_auth(object_name=object_name)
-            request = requests.get(self._full_path(object_name, self.version, path), params=params, headers=headers)
+            headers = self._build_auth_header()
+            url = self._full_path(object_name, self.version, path)
+            if method == 'post':
+                request = requests.post(url, headers=headers, data=params)
+            else:
+                request = requests.get(url, headers=headers, params=params)
             response = self._check_response(request)
             return response
         except PardotAPIError as err:
-            if err.message == 'Invalid API key or user key':
-                response = self._handle_expired_api_key(err, retries, 'get', object_name, path, params)
-                return response
+            if err.err_code == 184:
+                # Access token is invalid, unknown, or malformed.
+                # Refresh token and retry once more
+                if retries > 0:
+                    raise err
+                logger.warning(err.message)
+                self.access_token = None
+                self.authenticate()
+                return self._send(method, object_name, path, params, retries=1)
             else:
                 raise err
-
-    def _handle_expired_api_key(self, err, retries, method, object_name, path, params):
-        """
-        Tries to refresh an expired API key and re-issue the HTTP request. If the refresh has already been attempted,
-        an error is raised.
-        """
-        if retries != 0:
-            raise err
-        self.api_key = None
-        if self.authenticate():
-            response = getattr(self, method)(object_name=object_name, path=path, params=params, retries=1)
-            return response
-        else:
-            raise err
 
     @staticmethod
     def _full_path(object_name, version, path=None):
         """Builds the full path for the API request"""
         full = '{0}/api/{1}/version/{2}'.format(BASE_URI, object_name, version)
         if path:
-            return full + '{0}'.format(path)
+            return '{0}{1}'.format(full, path)
         return full
 
     @staticmethod
     def _check_response(response):
         """
-        Checks the HTTP response to see if it contains JSON. If it does, checks the JSON for error codes and messages.
-        Raises PardotAPIError if an error was found. If no error was found, returns the JSON. If JSON was not found,
-        returns the response status code.
+        Checks the HTTP response to see if it contains JSON. If it does, then checks the JSON for an error code
+        and raises PardotAPIError if an error is found, else returns the JSON. If the response doesn't contain
+        JSON then returns the HTTP response status code.
         """
         if response.headers.get('content-type') == 'application/json':
             json = response.json()
@@ -145,34 +135,47 @@ class PardotAPI(object):
         else:
             return response.status_code
 
-    def _check_auth(self, object_name):
-        if object_name == 'login':
-            return
-        if self.api_key is None:
-            self.authenticate()
-
     def authenticate(self):
         """
-         Authenticates the user and sets the API key if successful. Returns True if authentication is successful,
-         False if authentication fails.
+        Requests a Pardot API access token from Salesforce using the OAuth2 JWT Bearer Flow:
+        https://help.salesforce.com/articleView?id=sf.remoteaccess_oauth_jwt_flow.htm&type=5
         """
-        try:
-            auth = self.post('login', params={'email': self.email, 'password': self.password})
-            if type(auth) is int:
-                # sometimes the self.post method will return a status code instead of JSON response on failures
-                return False
-            self.api_key = auth.get('api_key', None)
-            if self.api_key is not None:
-                return True
-            return False
-        except PardotAPIError:
-            return False
+        logger.info('Requesting Pardot API access token from Salesforce for: {}'.format(self.email))
+        with open(self.private_key_file) as f:
+            private_key = f.read()
+
+        claim = {
+            'iss': self.consumer_key,
+            'exp': int(time.time()) + 300,
+            'aud': self.salesforce_domain,
+            'sub': self.email
+        }
+
+        assertion = jwt.encode(claim, private_key, algorithm='RS256').decode('utf8')
+        response = requests.post(
+            '{}/services/oauth2/token'.format(self.salesforce_domain),
+            data = {
+                'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+                'assertion': assertion
+            }
+        )
+        logger.debug('Authentication response ({}): {}'.format(
+            response.status_code, response.text))
+
+        if response.status_code == 400:
+            raise Exception('Authentication error: {}: {}'.format(
+                response.json().get('error'),
+                response.json().get('error_description')
+            ))
+        self.access_token = response.json().get('access_token')
 
     def _build_auth_header(self):
         """
-        Builds Pardot Authorization Header to be used with GET requests
+        Builds Pardot authorization header
         """
-        if not self.user_key or not self.api_key:
-            raise Exception('Cannot build Authorization header. user or api key is empty')
-        auth_string = 'Pardot api_key=%s, user_key=%s' % (self.api_key, self.user_key)
-        return {'Authorization': auth_string}
+        if self.access_token is None:
+            self.authenticate()
+        return {
+            'Authorization': 'Bearer {}'.format(self.access_token),
+            'Pardot-Business-Unit-Id': self.business_unit_id
+        }
