@@ -109,7 +109,7 @@ p.emails.send_to_email(prospect_email='joe@company.com', email_template_id=123)
 
 #### Handling expired Salesforce access tokens
 
-TODO
+If the Pardot API responds with [error code 184](https://developer.pardot.com/kb/error-codes-messages/#error-code-184) then the access token sent with the request is invalid, unknown, or malformed. In this case, PyPardot4 makes the assumption that the access token has expired and refreshes the token before retrying the request once more. If the subsequent response also contains an error code then it is raised and the request will not be tried again.
 
 #### Invalid API parameters
 
