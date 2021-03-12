@@ -60,9 +60,9 @@ Usage
 
 To connect to the Pardot API you must setup a Salesforce SSO user that is able to acquire Pardot access tokens. See these articles for more information about Salesforce OAuth and how to set it up:
 
-https://developer.pardot.com/kb/authentication/
-https://help.salesforce.com/articleView?id=sf.remoteaccess_oauth_flows.htm&type=5
-https://help.salesforce.com/articleView?id=sf.remoteaccess_oauth_jwt_flow.htm&type=5
+* https://developer.pardot.com/kb/authentication/
+* https://help.salesforce.com/articleView?id=sf.remoteaccess_oauth_flows.htm&type=5
+* https://help.salesforce.com/articleView?id=sf.remoteaccess_oauth_jwt_flow.htm&type=5
 
 Specifically this version of PyPardot4 uses the OAuth2 JSON Web Token (JWT) Bearer Flow, which requires you to create a X509 Certificate and add it to the connected app configuration in Salesforce. PyPardot4 generates a JWT, which is signed with the certificate's private key, and is used by Salesforce to verify the signature and issue a Pardot API access token.
 
