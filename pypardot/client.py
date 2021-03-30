@@ -1,3 +1,4 @@
+import os
 import jwt
 import time
 import requests
@@ -41,13 +42,16 @@ BASE_URI = 'https://pi.pardot.com'
 
 
 class PardotAPI(object):
-    def __init__(self, email, consumer_key, business_unit_id, 
-                 private_key_file, salesforce_sandbox=False, version=4):
-        self.email = email
-        self.consumer_key = consumer_key
-        self.business_unit_id = business_unit_id
-        self.private_key_file = private_key_file
-        self.salesforce_domain = 'https://{}.salesforce.com'.format('test' if salesforce_sandbox else 'login')
+    def __init__(self, version=4, **kwargs):
+        self.email = kwargs.get('email')
+        self.password = kwargs.get('password')
+        self.security_token = kwargs.get('security_token')
+        self.consumer_key = kwargs.get('consumer_key')
+        self.consumer_secret = kwargs.get('consumer_secret')
+        self.business_unit_id = kwargs.get('business_unit_id')
+        self.private_key_file = kwargs.get('private_key_file')
+        sandbox = kwargs.get('salesforce_sandbox')
+        self.salesforce_domain = 'https://{}.salesforce.com'.format('test' if sandbox else 'login')
         self.version = version
         self.accounts = Accounts(self)
         self.campaigns = Campaigns(self)
@@ -71,6 +75,19 @@ class PardotAPI(object):
         self.visits = Visits(self)
         self.visitors = Visitors(self)
         self.visitoractivities = VisitorActivities(self)
+
+    @classmethod
+    def from_env(cls):
+        """Initialize PardotAPI from environment variables"""
+        sandbox = os.getenv('SFDC_SANDBOX', 'false').lower() in ['true', '1']
+        return cls(email=os.getenv('SFDC_EMAIL'),
+                   password=os.getenv('SFDC_PASSWD'),
+                   security_token=os.getenv('SECURITY_TOKEN'),
+                   consumer_key=os.getenv('CONSUMER_KEY'),
+                   consumer_secret=os.getenv('CONSUMER_SECRET'),
+                   business_unit_id=os.getenv('BUSINESS_UNIT_ID'),
+                   private_key_file=os.getenv('PRIVATE_KEY_FILE'),
+                   salesforce_sandbox=sandbox)
 
     def post(self, object_name, path=None, params=None, retries=0):
         """Makes a POST request to the API."""
@@ -137,21 +154,40 @@ class PardotAPI(object):
 
     def authenticate(self):
         """
+        Requests a Pardot API access token from Salesforce. If the private key file is set then the
+        OAuth2 JWT Bearer Flow will be used, otherwise the Username-Password Flow is used.
+        """
+        if self.private_key_file is not None:
+            assert self.email is not None, 'Email not set'
+            assert self.consumer_key is not None, 'Consumer Key not set'
+            assert self.business_unit_id is not None, 'Business Unit Id not set'
+            self._authenticate_jwt()
+        else:
+            assert self.email is not None, 'Email of the SSO user not set'
+            assert self.password is not None, 'Password of the SSO user not set'
+            assert self.security_token is not None, 'Password Security Token not set'
+            assert self.consumer_key is not None, 'Consumer Key not set'
+            assert self.consumer_secret is not None, 'Consumer Secret not set'
+            assert self.business_unit_id is not None, 'Business Unit Id not set'
+            self._authenticate_passwd()
+
+    def _authenticate_jwt(self):
+        """
         Requests a Pardot API access token from Salesforce using the OAuth2 JWT Bearer Flow:
         https://help.salesforce.com/articleView?id=sf.remoteaccess_oauth_jwt_flow.htm&type=5
         """
-        logger.info('Requesting Pardot API access token from Salesforce for: {}'.format(self.email))
+        logger.info('Requesting access token using JWT Bearer Flow for: {}'.format(self.email))
         with open(self.private_key_file) as f:
             private_key = f.read()
 
         claim = {
             'iss': self.consumer_key,
-            'exp': int(time.time()) + 300,
+            'sub': self.email,
             'aud': self.salesforce_domain,
-            'sub': self.email
+            'exp': int(time.time()) + 604800
         }
-
-        assertion = jwt.encode(claim, private_key, algorithm='RS256').decode('utf8')
+        assertion = jwt.encode(claim, private_key, algorithm='RS256', headers={'alg':'RS256'}).decode('utf8')
+        logger.debug('assertion: {}'.format(assertion))
         response = requests.post(
             '{}/services/oauth2/token'.format(self.salesforce_domain),
             data = {
@@ -159,6 +195,29 @@ class PardotAPI(object):
                 'assertion': assertion
             }
         )
+        self._auth_response(response)
+
+    def _authenticate_passwd(self):
+        """
+        Requests a Pardot API access token from Salesforce using the username/password Flow:
+        https://developer.pardot.com/kb/authentication/
+        """
+        logger.info('Requesting access token using Username-Password Flow for: {}'.format(self.email))
+        data = {
+            'grant_type': 'password',
+            'client_id': self.consumer_key,
+            'client_secret': self.consumer_secret,
+            'username': self.email,
+            'password': self.password
+        }
+        response = requests.post(
+            '{}/services/oauth2/token'.format(self.salesforce_domain), data=data)
+        self._auth_response(response)
+
+    def _auth_response(self, response):
+        """
+        Extracts Pardot API access token from Salesforce authentication response
+        """
         logger.debug('Authentication response ({}): {}'.format(
             response.status_code, response.text))
 
