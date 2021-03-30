@@ -74,6 +74,16 @@ api = PardotAPI(
     private_key_file='/path/to/private.key'
 )
 api.authenticate()
+
+# or create from environment variables:
+#   SFDC_EMAIL='email@email.com'
+#   CONSUMER_KEY='consumer_key'
+#   BUSINESS_UNIT_ID='business_unit_id'
+#   PRIVATE_KEY_FILE='/path/to/private.key'
+
+load_dotenv()
+api = PardotAPI.from_env()
+api.authenticate()
 ```
 
 ### Querying Objects
