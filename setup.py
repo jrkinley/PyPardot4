@@ -10,5 +10,5 @@ setup(
     keywords="pardot",
     url="https://github.com/jrkinley/PyPardot4",
     packages=['pypardot', 'pypardot.objects'],
-    install_requires=['requests', 'pyjwt', 'cryptography'],
+    install_requires=['requests', 'pyjwt>=2', 'cryptography>=3'],
 )

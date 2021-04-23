@@ -186,7 +186,7 @@ class PardotAPI(object):
             'aud': self.salesforce_domain,
             'exp': int(time.time()) + 604800
         }
-        assertion = jwt.encode(claim, private_key, algorithm='RS256', headers={'alg':'RS256'}).decode('utf8')
+        assertion = jwt.encode(claim, private_key, algorithm='RS256', headers={'alg':'RS256'})
         logger.debug('assertion: {}'.format(assertion))
         response = requests.post(
             '{}/services/oauth2/token'.format(self.salesforce_domain),
